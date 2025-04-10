@@ -140,7 +140,7 @@ router.get('/analytics',
       const recentOrders = await Order.find({ farmer: req.user.id })
         .sort({ createdAt: -1 })
         .limit(5)
-        .populate('buyer', 'name')
+        .populate('consumer', 'name')
         .populate('items.product', 'name');
 
       // Get monthly sales data

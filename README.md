@@ -120,7 +120,7 @@ npm start
 - Ratings & Reviews
 
 ### Order
-- Buyer
+- Consumer
 - Farmer
 - Items
 - Total Amount

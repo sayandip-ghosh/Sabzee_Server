@@ -256,4 +256,60 @@ router.delete('/:id',
   }
 );
 
+// @route   POST api/products/:id/rate
+// @desc    Rate a product
+// @access  Private (Consumer only)
+router.post('/:id/rate',
+  protect,
+  authorize('consumer'),
+  [
+    check('rating', 'Rating must be between 1 and 5').isInt({ min: 1, max: 5 }),
+    check('review', 'Review is required').not().isEmpty()
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    try {
+      const product = await Product.findById(req.params.id);
+
+      if (!product) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+
+      // Check if user has already rated
+      const alreadyRated = product.ratings.find(
+        rating => rating.user.toString() === req.user.id
+      );
+
+      if (alreadyRated) {
+        // Update existing rating
+        alreadyRated.rating = req.body.rating;
+        alreadyRated.review = req.body.review;
+        alreadyRated.date = Date.now();
+      } else {
+        // Add new rating
+        product.ratings.push({
+          user: req.user.id,
+          rating: req.body.rating,
+          review: req.body.review
+        });
+      }
+
+      // Calculate average rating
+      const totalRatings = product.ratings.reduce((acc, item) => acc + item.rating, 0);
+      product.averageRating = totalRatings / product.ratings.length;
+
+      await product.save();
+
+      res.json(product);
+    } catch (err) {
+      console.error(err.message);
+      res.status(500).json({ message: 'Server Error' });
+    }
+  }
+);
+
 module.exports = router; 

@@ -1,12 +1,7 @@
 const mongoose = require('mongoose');
 
 const orderSchema = new mongoose.Schema({
-  buyer: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  farmer: {
+  consumer: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
@@ -23,6 +18,15 @@ const orderSchema = new mongoose.Schema({
     },
     price: {
       type: Number,
+      required: true
+    },
+    farmer: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    name: {
+      type: String,
       required: true
     }
   }],
@@ -42,15 +46,34 @@ const orderSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['cash', 'online', 'bank_transfer'],
+    enum: ['cash-on-delivery', 'online', 'bank_transfer'],
     required: true
   },
-  shippingAddress: {
-    street: String,
-    city: String,
-    state: String,
-    postalCode: String,
-    country: String
+  shippingDetails: {
+    fullName: {
+      type: String,
+      required: true
+    },
+    address: {
+      type: String,
+      required: true
+    },
+    city: {
+      type: String,
+      required: true
+    },
+    state: {
+      type: String,
+      required: true
+    },
+    postalCode: {
+      type: String,
+      required: true
+    },
+    phoneNumber: {
+      type: String,
+      required: true
+    }
   },
   deliveryDate: Date,
   trackingNumber: String,
@@ -61,6 +84,7 @@ const orderSchema = new mongoose.Schema({
 });
 
 // Create index for quick lookup
-orderSchema.index({ buyer: 1, farmer: 1, status: 1 });
+orderSchema.index({ consumer: 1, status: 1 });
+orderSchema.index({ 'items.farmer': 1 });
 
 module.exports = mongoose.model('Order', orderSchema); 
