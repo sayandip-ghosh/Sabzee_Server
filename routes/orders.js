@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const { check, validationResult } = require('express-validator');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
+const Cart = require('../models/Cart');
 const { protect, authorize } = require('../middleware/auth');
 
 // @route   POST api/orders
@@ -15,8 +17,14 @@ router.post('/',
     check('items', 'Items are required').isArray(),
     check('items.*.product', 'Product ID is required').not().isEmpty(),
     check('items.*.quantity', 'Quantity is required').isNumeric(),
-    check('paymentMethod', 'Payment method is required').isIn(['cash', 'online', 'bank_transfer']),
-    check('shippingAddress', 'Shipping address is required').not().isEmpty()
+    check('paymentMethod', 'Payment method is required').isIn(['cash-on-delivery', 'online', 'bank_transfer']),
+    check('shippingDetails', 'Shipping details are required').not().isEmpty(),
+    check('shippingDetails.fullName', 'Full name is required').notEmpty(),
+    check('shippingDetails.address', 'Address is required').notEmpty(),
+    check('shippingDetails.city', 'City is required').notEmpty(),
+    check('shippingDetails.state', 'State is required').notEmpty(),
+    check('shippingDetails.postalCode', 'Postal code is required').notEmpty(),
+    check('shippingDetails.phoneNumber', 'Phone number is required').notEmpty()
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -25,7 +33,7 @@ router.post('/',
     }
 
     try {
-      const { items, paymentMethod, shippingAddress, notes } = req.body;
+      const { items, paymentMethod, shippingDetails, notes } = req.body;
 
       // Validate products and calculate total
       let totalAmount = 0;
@@ -44,7 +52,8 @@ router.post('/',
         validatedItems.push({
           product: item.product,
           quantity: item.quantity,
-          price: product.price
+          price: product.price,
+          name: product.name
         });
 
         totalAmount += product.price * item.quantity;
@@ -55,12 +64,12 @@ router.post('/',
       }
 
       const order = new Order({
-        buyer: req.user.id,
+        consumer: req.user.id,
         farmer: validatedItems[0].product.farmer, // Assuming all products are from same farmer
         items: validatedItems,
         totalAmount,
         paymentMethod,
-        shippingAddress,
+        shippingDetails,
         notes
       });
 
@@ -75,21 +84,26 @@ router.post('/',
 );
 
 // @route   GET api/orders
-// @desc    Get all orders (filtered by role)
+// @desc    Get all orders (admin), user orders (consumer), or farmer orders (farmer)
 // @access  Private
 router.get('/', protect, async (req, res) => {
   try {
-    const query = {};
-    if (req.user.role === 'consumer') {
-      query.buyer = req.user.id;
-    } else if (req.user.role === 'farmer') {
-      query.farmer = req.user.id;
-    }
+    let orders = [];
 
-    const orders = await Order.find(query)
-      .populate('buyer', 'name email')
-      .populate('farmer', 'name email farmDetails')
-      .populate('items.product', 'name price');
+    if (req.user.role === 'admin') {
+      orders = await Order.find()
+        .populate('consumer', 'name email')
+        .populate('farmer', 'name')
+        .sort({ createdAt: -1 });
+    } else if (req.user.role === 'consumer') {
+      orders = await Order.find({ consumer: req.user.id })
+        .populate('farmer', 'name')
+        .sort({ createdAt: -1 });
+    } else if (req.user.role === 'farmer') {
+      orders = await Order.find({ farmer: req.user.id })
+        .populate('consumer', 'name email')
+        .sort({ createdAt: -1 });
+    }
 
     res.json(orders);
   } catch (err) {
@@ -104,18 +118,17 @@ router.get('/', protect, async (req, res) => {
 router.get('/:id', protect, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id)
-      .populate('buyer', 'name email')
-      .populate('farmer', 'name email farmDetails')
-      .populate('items.product', 'name price');
+      .populate('consumer', 'name email')
+      .populate('farmer', 'name');
 
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
 
-    // Check if user is authorized to view this order
+    // Check if the user is authorized to view this order
     if (
       req.user.role !== 'admin' &&
-      order.buyer.toString() !== req.user.id &&
+      order.consumer.toString() !== req.user.id &&
       order.farmer.toString() !== req.user.id
     ) {
       return res.status(401).json({ message: 'Not authorized' });
@@ -171,5 +184,105 @@ router.put('/:id',
     }
   }
 );
+
+/**
+ * @route   POST api/orders/checkout
+ * @desc    Create an order from cart items
+ * @access  Private (Consumer only)
+ */
+router.post('/checkout', protect, authorize('consumer'), async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { paymentMethod, shippingDetails, notes } = req.body;
+
+    // Validate input
+    if (!paymentMethod) {
+      return res.status(400).json({ message: 'Payment method is required' });
+    }
+
+    if (!shippingDetails || !shippingDetails.address) {
+      return res.status(400).json({ message: 'Shipping details are required' });
+    }
+
+    // Get user's cart
+    const cart = await Cart.findOne({ user: req.user.id }).populate('items.product');
+
+    if (!cart || cart.items.length === 0) {
+      return res.status(400).json({ message: 'Your cart is empty' });
+    }
+
+    // Group items by farmer
+    const itemsByFarmer = {};
+    for (const cartItem of cart.items) {
+      const product = cartItem.product;
+      
+      if (!product) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+
+      if (product.quantity < cartItem.quantity) {
+        return res.status(400).json({ 
+          message: `Insufficient quantity for ${product.name}. Available: ${product.quantity}, Requested: ${cartItem.quantity}` 
+        });
+      }
+
+      const farmerId = product.farmer.toString();
+      if (!itemsByFarmer[farmerId]) {
+        itemsByFarmer[farmerId] = [];
+      }
+
+      itemsByFarmer[farmerId].push({
+        product: product._id,
+        quantity: cartItem.quantity,
+        price: product.price,
+        name: product.name
+      });
+
+      // Update product quantity
+      product.quantity -= cartItem.quantity;
+      await product.save({ session });
+    }
+
+    // Create order for each farmer
+    const orders = [];
+    for (const farmerId in itemsByFarmer) {
+      const farmerItems = itemsByFarmer[farmerId];
+      
+      // Calculate total amount for this farmer's items
+      const farmerTotal = farmerItems.reduce((total, item) => {
+        return total + (item.price * item.quantity);
+      }, 0);
+
+      const order = new Order({
+        consumer: req.user.id,
+        farmer: farmerId,
+        items: farmerItems,
+        totalAmount: farmerTotal,
+        paymentMethod,
+        shippingDetails,
+        notes
+      });
+
+      await order.save({ session });
+      orders.push(order);
+    }
+
+    // Clear the cart
+    cart.items = [];
+    await cart.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.status(201).json(orders);
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error(err.message);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
 
 module.exports = router; 
