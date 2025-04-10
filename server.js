@@ -34,8 +34,11 @@ app.use('/api/orders', require('./routes/orders'));
 app.use('/api/predictions', require('./routes/predictions'));
 app.use('/api/yield-predictions', require('./routes/yield-predictions'));
 app.use('/api/forum', require('./routes/forum'));
+<<<<<<< HEAD
 app.use('/api/cart', require('./routes/cart'));
 
+=======
+>>>>>>> eb49848fbe4ad3f5a4f68f81beb61f3b4d7b3cd1
 // Basic error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
