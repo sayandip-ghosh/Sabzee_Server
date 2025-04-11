@@ -88,22 +88,18 @@ router.post('/',
 // @access  Private
 router.get('/', protect, async (req, res) => {
   try {
-    let orders = [];
-
-    if (req.user.role === 'admin') {
-      orders = await Order.find()
-        .populate('consumer', 'name email')
-        .populate('farmer', 'name')
-        .sort({ createdAt: -1 });
-    } else if (req.user.role === 'consumer') {
-      orders = await Order.find({ consumer: req.user.id })
-        .populate('farmer', 'name')
-        .sort({ createdAt: -1 });
-    } else if (req.user.role === 'farmer') {
-      orders = await Order.find({ farmer: req.user.id })
-        .populate('consumer', 'name email')
-        .sort({ createdAt: -1 });
-    }
+    // Get all orders from database with populated fields
+    const orders = await Order.find()
+      .populate('consumer', 'name email')
+      .populate({
+        path: 'items.product',
+        select: 'name price images unit farmer',
+        populate: {
+          path: 'farmer',
+          select: 'name _id'
+        }
+      })
+      .sort({ createdAt: -1 });
 
     res.json(orders);
   } catch (err) {
@@ -207,7 +203,14 @@ router.post('/checkout', protect, authorize('consumer'), async (req, res) => {
     }
 
     // Get user's cart
-    const cart = await Cart.findOne({ user: req.user.id }).populate('items.product');
+    const cart = await Cart.findOne({ user: req.user.id }).populate({
+      path: 'items.product',
+      select: 'name price images unit farmer quantity',
+      populate: {
+        path: 'farmer',
+        select: 'name'
+      }
+    });
 
     if (!cart || cart.items.length === 0) {
       return res.status(400).json({ message: 'Your cart is empty' });
@@ -228,7 +231,7 @@ router.post('/checkout', protect, authorize('consumer'), async (req, res) => {
         });
       }
 
-      const farmerId = product.farmer.toString();
+      const farmerId = product.farmer._id.toString();
       if (!itemsByFarmer[farmerId]) {
         itemsByFarmer[farmerId] = [];
       }
@@ -237,11 +240,17 @@ router.post('/checkout', protect, authorize('consumer'), async (req, res) => {
         product: product._id,
         quantity: cartItem.quantity,
         price: product.price,
+        farmer: product.farmer._id,
         name: product.name
       });
 
       // Update product quantity
       product.quantity -= cartItem.quantity;
+      
+      // Update product totalSales
+      if (!product.totalSales) product.totalSales = 0;
+      product.totalSales += cartItem.quantity;
+      
       await product.save({ session });
     }
 
@@ -271,17 +280,22 @@ router.post('/checkout', protect, authorize('consumer'), async (req, res) => {
 
     // Clear the cart
     cart.items = [];
+    cart.total = 0;
     await cart.save({ session });
 
     await session.commitTransaction();
     session.endSession();
 
-    res.status(201).json(orders);
+    res.status(201).json({ 
+      success: true,
+      message: 'Orders created successfully',
+      orders: orders 
+    });
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
-    console.error(err.message);
-    res.status(500).json({ message: 'Server Error' });
+    console.error('Error during checkout:', err);
+    res.status(500).json({ message: 'Server error during checkout process' });
   }
 });
 

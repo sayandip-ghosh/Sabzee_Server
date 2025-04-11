@@ -35,6 +35,7 @@ app.use('/api/predictions', require('./routes/predictions'));
 app.use('/api/yield-predictions', require('./routes/yield-predictions'));
 app.use('/api/forum', require('./routes/forum'));
 app.use('/api/cart', require('./routes/cart'));
+
 // Basic error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
